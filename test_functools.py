@@ -15,12 +15,98 @@ from jaraco.classes import properties
 
 from jaraco.functools import (
     Throttler,
+    assign_params,
     method_cache,
     retry,
     retry_call,
 )
 
 _T = TypeVar("_T")
+
+
+class TestAssignParams:
+    def test_positional_only(self) -> None:
+        def func(x: int, /, y: int = 2) -> tuple[int, int]:
+            return x, y
+
+        assigned = assign_params(func, {"x": 3, "ignored": 4})
+        assert isinstance(assigned, functools.partial)
+        assert assigned.func is func
+        assert assigned() == (3, 2)
+
+    def test_optional_gap(self) -> None:
+        def func(x: int = 1, y: int = 2, /, z: int = 3) -> tuple[int, int, int]:
+            return x, y, z
+
+        assigned = assign_params(func, {"y": 4})
+        assert assigned() == (1, 4, 3)
+        assert assigned(5) == (1, 4, 5)
+
+    def test_optional_suffix_remains_open(self) -> None:
+        def func(x: int = 1, y: int = 2, /) -> tuple[int, int]:
+            return x, y
+
+        assigned = assign_params(func, {"x": 3})
+        assert assigned() == (3, 2)
+        assert assigned(4) == (3, 4)
+
+    def test_required_suffix_remains_open(self) -> None:
+        def func(x: int, y: int, /) -> tuple[int, int]:
+            return x, y
+
+        assigned = assign_params(func, {"x": 3})
+        with pytest.raises(TypeError, match='argument'):
+            assigned()
+        assert assigned(4) == (3, 4)
+
+    def test_required_gap(self) -> None:
+        def func(x: int, y: int, /) -> tuple[int, int]:
+            return x, y
+
+        with pytest.raises(TypeError, match="missing required parameter 'x'"):
+            assign_params(func, {"y": 4})
+        assert assign_params(func, {"x": 3, "y": 4})() == (3, 4)
+
+    def test_required_gap_with_kwargs(self) -> None:
+        def func(x: int, y: int, /, **kwargs: int) -> tuple[int, int, dict[str, int]]:
+            return x, y, kwargs
+
+        with pytest.raises(TypeError, match="missing required parameter 'x'"):
+            assign_params(func, {"y": 4})
+        assert assign_params(func, {"x": 3, "y": 4})(y=5) == (3, 4, {"y": 5})
+
+    def test_unassigned_positional_only_and_keyword_overrides(self) -> None:
+        def func(x: int, /, y: int = 2, *, z: int = 3) -> tuple[int, int, int]:
+            return x, y, z
+
+        assigned = assign_params(func, {"y": 4, "z": 5})
+        assert assigned(1) == (1, 4, 5)
+        assert assigned(1, y=6, z=7) == (1, 6, 7)
+
+    def test_existing_partial(self) -> None:
+        def func(x: int = 1, y: int = 2, z: int = 3, /) -> tuple[int, int, int]:
+            return x, y, z
+
+        assigned = assign_params(functools.partial(func, 4), {"x": 9, "z": 5})
+        assert assigned() == (4, 2, 5)
+
+    def test_bound_method(self) -> None:
+        class Handler:
+            def method(self, arg: int, /, other: int = 2) -> tuple[int, int]:
+                return arg, other
+
+        assert assign_params(Handler().method, {"arg": 3})() == (3, 2)
+
+    def test_builtin(self) -> None:
+        assert assign_params(divmod, {"x": 7, "y": 3})() == (2, 1)
+
+    def test_keyword_with_positional_only_name(self) -> None:
+        def func(x: int, /, **kwargs: int) -> tuple[int, dict[str, int]]:
+            return x, kwargs
+
+        assigned = assign_params(func, {"x": 3})
+        assert assigned() == (3, {})
+        assert assigned(x=4) == (3, {"x": 4})
 
 
 class TestThrottler:

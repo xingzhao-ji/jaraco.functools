@@ -505,11 +505,56 @@ def assign_params(func, namespace):
     ...         print(arg)
     >>> assign_params(Handler().meth, dict(arg='crystal', foo='clear'))()
     crystal
+
+    Positional-only parameters are passed by position, even when ``**kwargs``
+    accepts the same name:
+
+    >>> def positional(x, /, y=2):
+    ...     return x, y
+    >>> assign_params(positional, dict(x=3))()
+    (3, 2)
+
+    Defaults fill gaps before an assigned positional-only parameter.
+    Parameters after the last assignment remain available to later calls:
+
+    >>> def optional(x=1, y=2, /):
+    ...     return x, y
+    >>> assign_params(optional, dict(y=4))()
+    (1, 4)
+    >>> assign_params(optional, dict(x=3))(4)
+    (3, 4)
+
+    A required positional-only parameter cannot be skipped before a later
+    assignment. Such assignments raise at construction time:
+
+    >>> def required(x, y, /):
+    ...     return x, y
+    >>> assign_params(required, dict(y=4))
+    Traceback (most recent call last):
+    TypeError: Cannot assign positional-only parameters after missing required parameter 'x'
     """
     sig = inspect.signature(func)
     params = sig.parameters.keys()
     call_ns = {k: namespace[k] for k in params if k in namespace}
-    return functools.partial(func, **call_ns)
+    positional = [
+        param
+        for param in sig.parameters.values()
+        if param.kind == inspect.Parameter.POSITIONAL_ONLY
+    ]
+    while positional and positional[-1].name not in call_ns:
+        positional.pop()
+    args = []
+    for param in positional:
+        if param.name in call_ns:
+            args.append(call_ns.pop(param.name))
+        elif param.default is not inspect.Parameter.empty:
+            args.append(param.default)
+        else:
+            raise TypeError(
+                'Cannot assign positional-only parameters after missing required '
+                f'parameter {param.name!r}'
+            )
+    return functools.partial(func, *args, **call_ns)
 
 
 def save_method_args(method):
